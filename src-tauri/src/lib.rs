@@ -59,11 +59,13 @@ async fn api(
         "open_project",
         "set_permission",
         "select_provider",
-        "run_start",
-        "run_poll",
-        "cancel_run",
-        "turn",
-        "approve",
+        "agent_message",
+        "agent_append",
+        "agent_event",
+        "agent_preview",
+        "agent_tool",
+        "agent_pending",
+        "provider_key",
     ]
     .contains(&method.as_str())
     {
@@ -139,12 +141,13 @@ async fn rpc(
             "open_project",
             "set_permission",
             "select_provider",
-            "select_provider",
-            "run_start",
-            "run_poll",
-            "cancel_run",
-            "turn",
-            "approve",
+            "agent_message",
+            "agent_append",
+            "agent_event",
+            "agent_preview",
+            "agent_tool",
+            "agent_pending",
+            "provider_key",
         ]
         .contains(&method.as_str())
         {
@@ -322,11 +325,89 @@ fn pick_folder() -> Result<Option<String>, String> {
             .map(|p| p.display().to_string()))
     }
 }
+/// Origin of the Velocity key service (redeem + model catalog + OpenAI-compatible API).
+const VELOCITY_ORIGIN: &str = "https://velocity.holy-voice-dd33.workers.dev";
+
+/// Pull a `VEL-XXXX` code out of whatever the user pasted, so a full link or a
+/// sentence from the site still works. Falls back to the trimmed text as-is.
+fn velocity_code(input: &str) -> Result<String, String> {
+    let re = regex::Regex::new(r"VEL-[A-Za-z0-9_-]+").expect("static velocity code pattern");
+    let code = re.find(input).map(|m| m.as_str()).unwrap_or(input).trim();
+    if code.is_empty() {
+        return Err("Вставь ключ формата VEL-XXXX".into());
+    }
+    Ok(code.to_string())
+}
+
+/// Redeem a key against the Velocity worker and return everything needed to
+/// configure the provider: api key, balances, base url and the model catalog.
+/// Done in Rust because the webview CSP blocks cross-origin fetches.
+async fn redeem_velocity(client: &reqwest::Client, code: &str) -> Result<Value, String> {
+    let response = client
+        .post(format!("{VELOCITY_ORIGIN}/api/redeem"))
+        .json(&json!({"code": code}))
+        .send()
+        .await
+        .map_err(|e| format!("Сервер Velocity недоступен: {e}"))?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Некорректный ответ сервера Velocity: {e}"))?;
+    if let Some(error) = body.get("error").and_then(|v| v.as_str()) {
+        return Err(error.into());
+    }
+    if !status.is_success() {
+        return Err(format!("Ключ не активирован (HTTP {status})"));
+    }
+    // The site itself falls back to the raw code when the worker returns no apiKey.
+    let api_key = body
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(code)
+        .to_string();
+    let models = match client
+        .get(format!("{VELOCITY_ORIGIN}/api/models"))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("models").cloned())
+            .unwrap_or_else(|| json!([])),
+        _ => json!([]),
+    };
+    Ok(json!({
+        "code": code,
+        "api_key": api_key,
+        "base_url": format!("{VELOCITY_ORIGIN}/v1"),
+        "balances": body.get("balances").cloned().unwrap_or_else(|| json!({})),
+        "totals": body.get("totals").cloned().unwrap_or_else(|| json!({})),
+        "models": models,
+    }))
+}
+
+#[tauri::command]
+async fn velocity_redeem(code: String) -> Result<Value, String> {
+    let code = velocity_code(&code)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    redeem_velocity(&client, &code).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::Manager;
     tauri::Builder::default()
         .plugin(tauri_plugin_secure_keystore::init())
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             let store = app.path().app_data_dir()?.join("history.json");
             app.manage(Shared {
@@ -344,7 +425,8 @@ pub fn run() {
             host_stop,
             discover,
             platform,
-            pick_folder
+            pick_folder,
+            velocity_redeem
         ])
         .run(tauri::generate_context!())
         .expect("Velocity Harness launch failed");
@@ -439,4 +521,37 @@ mod credential_tests {
   q=p.clone();q.protocol="anthropic".into();assert_ne!(credential_id(&p),credential_id(&q));
   assert!(!credential_id(&p).contains("NEVER_EXPORT_SECRET"));
  }
+}
+
+#[cfg(test)]
+mod velocity_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_code_from_pasted_text() {
+        assert_eq!(velocity_code("VEL-AB12").unwrap(), "VEL-AB12");
+        assert_eq!(
+            velocity_code("https://velocity.holy-voice-dd33.workers.dev/#/key?k=VEL-XY99 ")
+                .unwrap(),
+            "VEL-XY99"
+        );
+        assert_eq!(velocity_code("ключ VEL-ZZ01 из админки").unwrap(), "VEL-ZZ01");
+        assert!(velocity_code("   ").is_err());
+        assert!(velocity_code("").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs network access to the Velocity worker"]
+    async fn redeems_and_surfaces_worker_error() {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap();
+        let error = redeem_velocity(&client, "VEL-NOPE").await.unwrap_err();
+        assert!(
+            error.to_lowercase().contains("invalid") || error.contains("Неверн"),
+            "unexpected error: {error}"
+        );
+    }
 }

@@ -21,6 +21,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"
 regex = "1"
 tauri-plugin-secure-keystore = "=0.0.3-beta.1"
+tauri-plugin-http = "2"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = { version = "0.15", default-features = false, features = ["gtk3"] }

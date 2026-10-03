@@ -10,5 +10,17 @@ src-tauri/gen/android/local.properties
 *.keystore
 .env*
 
+# Package manager lockfiles we don't use (npm via package-lock.json)
+bun.lock
+
+# Build artefacts
+*.log
+*.AppImage
+*.deb
+*.rpm
+*.apk
+*.aab
+.DS_Store
+
 # Generated test bundles
 tests/components.test.cjs
