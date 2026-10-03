@@ -1,0 +1,14 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/**/build/
+src-tauri/gen/android/app/src/main/jniLibs/
+src-tauri/gen/android/local.properties
+*.jks
+*.p12
+*.keystore
+.env*
+
+# Generated test bundles
+tests/components.test.cjs
