@@ -194,10 +194,10 @@ export default function ToolChips({
             row hover pills room inside this overflow-hidden clip box */}
         <div className="-mx-1 overflow-hidden px-1.5 pb-1" {...(!open?{inert:""}:{})}>
         <div className="mt-1.5 flex flex-col gap-1">
-          {steps.slice(0,live?steps.length:step).map((row) => {
+          {steps.slice(0,live?steps.length:step).map((row,ri) => {
             const rowOpen = openRows.has(row.label);
             return (
-            <div key={row.label} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
+            <div key={`${ri}-${row.label}`} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
               <button
                 type="button"
                 aria-expanded={rowOpen}
@@ -237,9 +237,9 @@ export default function ToolChips({
                 <div className="min-h-0 overflow-hidden" {...(!rowOpen?{inert:""}:{})}>
                   <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
                     {row.detailContent}
-                    {row.detail.map((line) => (
+                    {row.detail.map((line,li) => (
                       <span
-                        key={line.text}
+                        key={`${li}-${line.text}`}
                         className={`truncate text-[11.5px] leading-[1.6] ${row.detailMono ? "font-mono" : ""} ${line.tone === "add" ? "text-green" : "text-ink-2"}`}
                       >
                         {line.text}
@@ -254,7 +254,7 @@ export default function ToolChips({
         </div>
 
       {/* file-diff chips */}
-      {(live||step >= total) && (
+      {diffs.length>0&&(live||step >= total) && (
         <div className="mt-2.5 flex max-w-full flex-wrap gap-1.5 border-t border-line pt-2.5">
           {diffs.map((d, i) => (
             <span

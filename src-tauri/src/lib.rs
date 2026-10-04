@@ -311,18 +311,67 @@ async fn discover() -> Result<Value, String> {
 fn platform() -> Value {
     json!({"android":cfg!(target_os="android")})
 }
+fn plan_dir() -> Result<std::path::PathBuf, String> {
+    let dir = std::path::PathBuf::from("/tmp/vhr");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+fn plan_name(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Bad plan name".into());
+    }
+    Ok(format!("{name}.md"))
+}
 #[tauri::command]
-fn pick_folder() -> Result<Option<String>, String> {
+fn plan_save(name: String, content: String) -> Result<Value, String> {
+    if content.len() > 500_000 {
+        return Err("Plan too large".into());
+    }
+    let file = plan_dir()?.join(plan_name(&name)?);
+    std::fs::write(&file, content).map_err(|e| e.to_string())?;
+    Ok(json!({"path": file.display().to_string()}))
+}
+#[tauri::command]
+fn plan_read(name: String) -> Result<Value, String> {
+    let file = plan_dir()?.join(plan_name(&name)?);
+    let content = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    Ok(json!({"path": file.display().to_string(), "content": content}))
+}
+#[tauri::command]
+fn plan_list() -> Result<Value, String> {
+    let dir = plan_dir()?;
+    let mut out = vec![];
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "md") {
+                out.push(p.file_stem().unwrap_or_default().to_string_lossy().to_string());
+            }
+        }
+    }
+    out.sort();
+    Ok(json!(out))
+}
+#[tauri::command]
+async fn pick_folder() -> Result<Option<String>, String> {
     #[cfg(target_os = "android")]
     {
         Err("Выберите папку на Linux-компьютере".into())
     }
     #[cfg(not(target_os = "android"))]
     {
-        Ok(rfd::FileDialog::new()
-            .set_title("Папка проекта Velocity")
-            .pick_folder()
-            .map(|p| p.display().to_string()))
+        // rfd::FileDialog::pick_folder() runs a blocking GTK loop.
+        // Awaiting it directly in an async command stalls the async
+        // runtime and hangs the whole webview until the dialog closes
+        // (or forever on headless/Wayland). Push it to a blocking thread.
+        tokio::task::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .set_title("Папка проекта Velocity")
+                .pick_folder()
+                .map(|p| p.display().to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())
     }
 }
 /// Origin of the Velocity key service (redeem + model catalog + OpenAI-compatible API).
@@ -426,6 +475,9 @@ pub fn run() {
             discover,
             platform,
             pick_folder,
+            plan_save,
+            plan_read,
+            plan_list,
             velocity_redeem
         ])
         .run(tauri::generate_context!())

@@ -33,6 +33,8 @@ pub struct Session {
     pub project_root: Option<PathBuf>,
     #[serde(default = "ask")]
     pub permission: String,
+    #[serde(default = "build_mode")]
+    pub mode: String,
     #[serde(default)]
     pub events: Vec<Value>,
     #[serde(default)]
@@ -40,6 +42,9 @@ pub struct Session {
 }
 fn ask() -> String {
     "ask".into()
+}
+fn build_mode() -> String {
+    "build".into()
 }
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct Archive {
@@ -210,6 +215,7 @@ impl Engine {
                         project_id,
                         project_root: None,
                         permission: ask(),
+                        mode: build_mode(),
                         events: vec![],
                         title: "Новый чат".into(),
                     },
@@ -219,7 +225,7 @@ impl Engine {
             }
             "sessions" => {
                 let d = self.data.lock().await;
-                Ok(Value::Array(d.sessions.iter().map(|(id,s)|json!({"id":id,"title":s.title,"project_id":s.project_id,"permission":s.permission,"events":s.events,"pending":s.grant.as_ref().map(|g|json!({"grant":g,"calls":s.pending}))})).collect()))
+                Ok(Value::Array(d.sessions.iter().map(|(id,s)|json!({"id":id,"title":s.title,"project_id":s.project_id,"permission":s.permission,"mode":s.mode,"events":s.events,"pending":s.grant.as_ref().map(|g|json!({"grant":g,"calls":s.pending}))})).collect()))
             }
             "metadata" => {
                 let d = self.data.lock().await;
@@ -242,7 +248,7 @@ impl Engine {
             }
             "set_permission" => {
                 let mode = body["mode"].as_str().ok_or("Нет режима")?;
-                if !["ask", "read", "project"].contains(&mode) {
+                if !["ask", "read", "project", "plan", "yolo"].contains(&mode) {
                     return Err("Неверный режим".into());
                 }
                 let mut d = self.data.lock().await;
@@ -251,6 +257,20 @@ impl Engine {
                     .get_mut(body["session"].as_str().ok_or("Нет сессии")?)
                     .ok_or("Нет сессии")?;
                 s.permission = mode.into();
+                self.save(&d)?;
+                Ok(json!({"ok":true}))
+            }
+            "set_mode" => {
+                let mode = body["mode"].as_str().ok_or("Нет режима")?;
+                if !["plan", "build"].contains(&mode) {
+                    return Err("Неверный режим".into());
+                }
+                let mut d = self.data.lock().await;
+                let s = d
+                    .sessions
+                    .get_mut(body["session"].as_str().ok_or("Нет сессии")?)
+                    .ok_or("Нет сессии")?;
+                s.mode = mode.into();
                 self.save(&d)?;
                 Ok(json!({"ok":true}))
             }
@@ -303,7 +323,7 @@ impl Engine {
                 } else {
                     d.project.clone()
                 };
-                let (uev, permission, title, transcript) = {
+                let (uev, permission, mode, title, transcript) = {
                     let s = d.sessions.entry(id.clone()).or_insert(Session {
                         messages: vec![],
                         pending: vec![],
@@ -311,6 +331,7 @@ impl Engine {
                         project_id: None,
                         project_root: fallback.clone(),
                         permission: ask(),
+                        mode: build_mode(),
                         events: vec![],
                         title: "Новый чат".into(),
                     });
@@ -323,6 +344,7 @@ impl Engine {
                     (
                         uev,
                         s.permission.clone(),
+                        s.mode.clone(),
                         s.title.clone(),
                         s.messages.clone(),
                     )
@@ -335,7 +357,7 @@ impl Engine {
                 };
                 let enabled = root.is_some() && !cfg!(target_os = "android");
                 self.save(&d)?;
-                Ok(json!({"session":id,"history":history,"title":title,"user_event":uev,"provider":{"protocol":provider.protocol,"base_url":provider.base_url,"model":provider.model},"permission":permission,"enabled":enabled,"root":root.map(|p|p.display().to_string())}))
+                Ok(json!({"session":id,"history":history,"title":title,"user_event":uev,"provider":{"protocol":provider.protocol,"base_url":provider.base_url,"model":provider.model},"permission":permission,"mode":mode,"enabled":enabled,"root":root.map(|p|p.display().to_string())}))
             }
             "agent_append" => {
                 let id = body["session"].as_str().ok_or("Нет сессии")?;
@@ -398,10 +420,11 @@ impl Engine {
                     return Err("Неверный вызов инструмента".into());
                 }
                 let mut d = self.data.lock().await;
-                let (root, mode, name) = {
+                let (root, mode, perm, name) = {
                     let s = d.sessions.get(id).ok_or("Нет сессии")?;
                     (
                         root_for(&d, s)?,
+                        s.mode.clone(),
                         s.permission.clone(),
                         call["function"]["name"]
                             .as_str()
@@ -410,7 +433,7 @@ impl Engine {
                     )
                 };
                 let write = ["write_file", "edit_file", "shell"].contains(&name.as_str());
-                let allow = allow && !(write && mode == "read");
+                let allow = allow && !(write && perm == "read") && !(write && mode == "plan");
                 if allow
                     && ["write_file", "edit_file"].contains(&name.as_str())
                     && call["preview"].is_null()

@@ -1,6 +1,6 @@
 import React,{useState,useMemo} from 'react';
 import {structuredPatch} from 'diff';
-import {Terminal,FileText,Shield} from '@geist-ui/icons';
+import {Terminal,FileText,Shield,ChevronDown} from '@geist-ui/icons';
 import CodeBlock,{type DiffRow} from './primitives/CodeBlock';
 import ToolChips from './primitives/ToolChips';
 import ApprovalCard from './primitives/ApprovalCard';
@@ -11,7 +11,20 @@ export function FileDiff({preview}:{preview:Preview}){
  return <div className="file-review"><CodeBlock variant="Diff" filename={preview.path} code={preview.after} diff={rows} labels={{copy:'Копировать',copied:'Скопировано'}}/>{rows.length>=1200&&<p className="muted">Показаны первые 1200 строк diff. Большую правку лучше разделить.</p>}</div>
 }
 function args(value?:string){try{return JSON.parse(value||'{}')}catch{return {}}}
+function extOf(p:string){const m=/\.([a-z0-9]+)$/i.exec(p||'');return (m?.[1]||'').toLowerCase();}
+export function attachInfo(event:AgentEvent){let a:any={};try{a=JSON.parse(event.arguments||'{}');}catch{}const prev=(event.preview as any)||{};const path=String(prev.path||a.path||'file');const content=String(prev.content||a.content||'');const name=path.split('/').pop()||path;return {path,name,content};}
+export function AttachedFile({event,onOpen}:{event:AgentEvent;onOpen?:()=>void}){
+  const [open,setOpen]=useState(false);const [copied,setCopied]=useState(false);
+  const {name,content}=attachInfo(event);
+  const kb=(new TextEncoder().encode(content).length/1024).toFixed(1);
+  const copy=()=>{navigator.clipboard.writeText(content).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),1500);}).catch(()=>{});};
+  const download=()=>{const blob=new Blob([content],{type:'text/plain'});const u=URL.createObjectURL(blob);const l=document.createElement('a');l.href=u;l.download=name;l.click();setTimeout(()=>URL.revokeObjectURL(u),2000);};
+  if(onOpen)return <div className="attached-file" data-testid="attached-file"><button className="attached-file-row" onClick={onOpen}><span className="attached-file-icon"><FileText size={16}/></span><span className="attached-file-name">{name}</span><span className="attached-file-size">{kb} KB</span><span className="attached-file-chevron"><ChevronDown size={14}/></span></button></div>;
+  return <div className="attached-file" data-testid="attached-file"><button className="attached-file-row" onClick={()=>setOpen(o=>!o)} aria-expanded={open}><span className="attached-file-icon"><FileText size={16}/></span><span className="attached-file-name">{name}</span><span className="attached-file-size">{kb} KB</span><span className={"attached-file-chevron"+(open?" open":"")}><ChevronDown size={14}/></span></button>{open&&<div className="attached-file-body"><pre>{content.slice(0,8000)}</pre><div className="attached-file-actions"><button className="ui-button" data-size="xs" onClick={copy}>{copied?'Copied':'Copy'}</button><button className="ui-button" data-size="xs" onClick={download}>Download</button></div></div>}</div>;
+}
+
 export function ToolDetails({event}:{event:AgentEvent}){
+ if(event.name==='attach_file')return <AttachedFile event={event}/>;
  const [tab,setTab]=useState('output');const a=args(event.arguments);const preview=event.preview||event.result?.preview;
  if(preview&&['edit_file','write_file'].includes(event.name||''))return <><FileDiff preview={preview}/><p className={event.result?.error?'risk-note':'muted'} role="status">{event.result?.error|| (event.status==='running'?'Применяю правку…':'Правка применена')}</p></>;
  return <div className="native-tool-panel"><div className="native-tool-tabs" role="tablist" aria-label="Детали инструмента">{['command','output'].map(v=><button key={v} role="tab" aria-selected={tab===v} onClick={()=>setTab(v)}>{v==='command'?'Command':'Output'}</button>)}</div><pre>{tab==='command'?(event.name==='shell'?a.command:JSON.stringify({tool:event.name,...a},null,2)):`status: ${event.status||'exited'}\nexit_code: ${event.result?.code??(event.result?.error?'error':'0')}\n\nstdout:\n${typeof event.result?.stdout==='string'?event.result.stdout:JSON.stringify(event.result,null,2)}\n\nstderr:\n${event.result?.stderr||''}`}</pre></div>
@@ -19,6 +32,7 @@ export function ToolDetails({event}:{event:AgentEvent}){
 export function ToolCall({event,onRecommend,disabled}:{event:AgentEvent;onRecommend:(text:string)=>void;disabled:boolean}){
  const a=args(event.arguments);
  if(event.name==='recommend_options'&&Array.isArray(event.result?.options)&&event.result.options.length){const options=event.result.options.map((o:any,i:number)=>({key:String(i),body:<>{String(o.body||o.short)}</>,short:String(o.short||o.body),signal:0,tone:'var(--ink-3)',label:'Вариант',cta:'Продолжить',ctaVariant:'primary' as const}));return <RecommendationCard options={options} labels={{title:event.result.title||'Как продолжим?',alternatives:'Альтернативы',otherOptions:'Другие варианты',accepted:'Выбрано'}} onAccept={o=>onRecommend('Выбираю вариант: '+o.short)} disabled={disabled}/>}
+ if(event.name==='attach_file')return <AttachedFile event={event}/>;
  return <div className="native-tool-call"><ToolChips live diffs={[]} labels={{header:event.status==='running'?'Инструмент работает':'Действие агента',more:''}} steps={[{icon:event.name==='shell'?'run':event.name==='read_file'?'read':'write',label:event.name||'tool',chip:a.path||a.command||a.query||a.pattern||'Детали',mono:true,detailMono:true,detail:[],detailContent:<ToolDetails event={event}/>}]} /></div>
 }
 function ActionReview({call}:{call:Call}){const a=args(call.function.arguments);const name=call.function.name;
