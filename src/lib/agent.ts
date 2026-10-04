@@ -99,7 +99,8 @@ export async function runTurn(ctx:TurnContext):Promise<void>{
   // Reasoning effort: OpenAI-compatible gateways take `reasoning_effort`,
   // Anthropic takes an extended-thinking token budget.
   const effort=ctx.effort&&ctx.effort!=='none'?ctx.effort:undefined;
-  const providerOptions=!effort?undefined:ctx.provider.protocol==='anthropic'
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const providerOptions:any=!effort?undefined:ctx.provider.protocol==='anthropic'
     ?{anthropic:{thinking:{type:'enabled' as const,budgetTokens:({low:2048,medium:8192,high:16384,ultra:32768} as Record<string,number>)[effort]},sendReasoning:true}}
     :{velocity:{reasoningEffort:effort}};
   // Some OpenAI-compatible gateways (e.g. Velocity) reject `system` messages.
@@ -193,7 +194,7 @@ export async function runTurn(ctx:TurnContext):Promise<void>{
     const reasoningParts=ctx.provider.protocol==='anthropic'
       ?rBlocks.filter(b=>b.text||b.signature).map(b=>({type:'reasoning' as const,text:b.text,providerOptions:b.signature?{anthropic:{signature:b.signature}}:{}}))
       :[];
-    const assistantMsg:ModelMessage={role:'assistant',content:[...reasoningParts,...(text?[{type:'text' as const,text}]:[]),...calls.map(c=>({type:'tool-call' as const,toolCallId:c.toolCallId,toolName:c.toolName,input:c.input}))]};
+    const assistantMsg:ModelMessage={role:'assistant',content:[...reasoningParts,...(text?[{type:'text' as const,text}]:[]),...calls.map(c=>({type:'tool-call' as const,toolCallId:c.toolCallId,toolName:c.toolName,input:c.input}))] as any};
     const auto:{call:AgentToolCall;allow:boolean}[]=[];
     const askList:AgentToolCall[]=[];
     const always=ctx.alwaysAllow||[];
